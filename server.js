@@ -40,20 +40,22 @@ async function resolveToFile(videoId) {
 
   const tempBase = path.join(os.tmpdir(), `agsstack_${videoId}_${Date.now()}`);
 
+try {
+  // Added extractor-args to spoof the request client and bypass datacenter IP tracking
+  await execAsync(
+    `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 --extractor-args "youtube:player_client=tv_embedded,web" -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
+    { timeout: 90000 }
+  );
+} catch (e) {
+  // If extraction still hits a block, this log tells us exactly what YouTube replied with
+  console.error(`[Extraction Engine Failure Debug]: ${e.message}`);
   try {
-    // The shell will now evaluate standard commands flawlessly since your PATH is cleanly patched
-    await execAsync(
-      `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
-      { timeout: 90000 }
-    );
-  } catch (e) {
-    try {
-      fs.readdirSync(os.tmpdir())
-        .filter(f => f.includes(`agsstack_${videoId}_`))
-        .forEach(f => fs.unlinkSync(path.join(os.tmpdir(), f)));
-    } catch (_) {}
-    throw new Error(`yt-dlp failed for ${videoId}: ${e.message}`);
-  }
+    fs.readdirSync(os.tmpdir())
+      .filter(f => f.includes(`agsstack_${videoId}_`))
+      .forEach(f => fs.unlinkSync(path.join(os.tmpdir(), f)));
+  } catch (_) {}
+  throw new Error(`yt-dlp failed for ${videoId}: ${e.message}`);
+}
 
   const savedFiles = fs.readdirSync(os.tmpdir()).filter(f =>
     f.includes(`agsstack_${videoId}_`) && !f.endsWith('.part')
