@@ -10,7 +10,8 @@ import 'dotenv/config';
 
 const execAsync = promisify(exec);
 const app = express();
-const PORT = 3000;
+// FIX 1: Dynamically fall back to Render's internal assigned routing port parameter
+const PORT = process.env.PORT || 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,8 +38,9 @@ async function resolveToFile(videoId) {
   const tempBase = path.join(os.tmpdir(), `agsstack_${videoId}_${Date.now()}`);
 
   try {
+    // FIX 2: Pointed explicitly to the local user space binary path where pip placed yt-dlp
     await execAsync(
-      `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
+      `~/.local/bin/yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
       { timeout: 90000 }
     );
   } catch (e) {
