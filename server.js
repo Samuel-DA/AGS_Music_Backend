@@ -1,3 +1,6 @@
+// Explicitly inject user-space binary directories into the system execution PATH environment map
+process.env.PATH = `${process.env.PATH}:/usr/local/bin:/home/render/.local/bin`;
+
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,7 +13,7 @@ import 'dotenv/config';
 
 const execAsync = promisify(exec);
 const app = express();
-// FIX 1: Dynamically fall back to Render's internal assigned routing port parameter
+// Dynamically read the assigned runtime port provided by Render's routing infrastructure
 const PORT = process.env.PORT || 3000;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,9 +41,9 @@ async function resolveToFile(videoId) {
   const tempBase = path.join(os.tmpdir(), `agsstack_${videoId}_${Date.now()}`);
 
   try {
-    // FIX 2: Pointed explicitly to the local user space binary path where pip placed yt-dlp
+    // The shell will now evaluate standard commands flawlessly since your PATH is cleanly patched
     await execAsync(
-      `~/.local/bin/yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
+      `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
       { timeout: 90000 }
     );
   } catch (e) {
