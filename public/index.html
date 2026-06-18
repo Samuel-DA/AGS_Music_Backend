@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AGS Music</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">🎵 AGS Music</div>
+      <nav class="navigation-menu">
+        <ul>
+          <li class="menu-item active" data-type="search-view">Search & Explore</li>
+          <li class="menu-item" data-type="favorites">My Favorites (<span id="fav-count">0</span>)</li>
+        </ul>
+      </nav>
+    </aside>
+
+    <section class="main-display">
+      <header class="content-header">
+        <div class="search-box-container" id="search-box-wrapper">
+          <input type="text" id="search-input" placeholder="Search any song, artist, or album...">
+          <button id="search-button">Search</button>
+        </div>
+        <h1 id="view-title" style="margin-top: 20px;">Search Results</h1>
+      </header>
+      
+      <div class="scroll-container">
+        <ul id="track-table"></ul>
+      </div>
+    </section>
+
+    <footer class="player-dock">
+      <div class="track-info-block">
+        <img id="player-cover" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='50' height='50'><rect width='50' height='50' fill='%23282828'/></svg>" alt="Cover">
+        <div class="text-meta">
+          <p id="player-title">Nothing playing</p>
+          <p id="player-artist"></p>
+        </div>
+      </div>
+
+      <div class="playback-controls-block">
+        <div class="button-row">
+          <button id="btn-shuffle" class="control-btn" title="Toggle Shuffle">🔀</button>
+          <button id="btn-prev" class="control-btn" title="Previous Track">⏮</button>
+          <button id="btn-play" class="control-btn core-play-btn" title="Play">▶</button>
+          <button id="btn-next" class="control-btn" title="Next Track">⏭</button>
+          <button id="btn-fav" class="control-btn" title="Add to Favorites">♡</button>
+        </div>
+        <div class="progress-row">
+          <span id="time-current">0:00</span>
+          <input type="range" id="progress-timeline" value="0" min="0" max="100">
+          <span id="time-total">0:00</span>
+        </div>
+      </div>
+
+      <div class="utility-block">
+        <span class="volume-speaker">🔊</span>
+        <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="0.8">
+      </div>
+    </footer>
+  </main>
+
+  <audio id="audio-engine" preload="auto"></audio>
+  <script src="app.js"></script>
+</body>
+</html>
