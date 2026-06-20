@@ -15,6 +15,8 @@ const execAsync = promisify(exec);
 const app = express();
 // Dynamically read the assigned runtime port provided by Render's routing infrastructure
 const PORT = process.env.PORT || 3000;
+// Add near the top with other constants
+const COOKIES_PATH = process.env.COOKIES_PATH || path.join(__dirname, 'cookies.txt');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,22 +42,23 @@ async function resolveToFile(videoId) {
 
   const tempBase = path.join(os.tmpdir(), `agsstack_${videoId}_${Date.now()}`);
 
-try {
-  // Added extractor-args to spoof the request client and bypass datacenter IP tracking
-  await execAsync(
-    `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 --extractor-args "youtube:player_client=tv_embedded,web" -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
-    { timeout: 90000 }
-  );
-} catch (e) {
-  // If extraction still hits a block, this log tells us exactly what YouTube replied with
-  console.error(`[Extraction Engine Failure Debug]: ${e.message}`);
+  const cookiesFlag = fs.existsSync(COOKIES_PATH)
+    ? `--cookies "${COOKIES_PATH}"`
+    : '';
+
   try {
-    fs.readdirSync(os.tmpdir())
-      .filter(f => f.includes(`agsstack_${videoId}_`))
-      .forEach(f => fs.unlinkSync(path.join(os.tmpdir(), f)));
-  } catch (_) {}
-  throw new Error(`yt-dlp failed for ${videoId}: ${e.message}`);
-}
+    await execAsync(
+      `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 ${cookiesFlag} -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
+      { timeout: 90000 }
+    );
+  } catch (e) {
+    try {
+      fs.readdirSync(os.tmpdir())
+        .filter(f => f.includes(`agsstack_${videoId}_`))
+        .forEach(f => fs.unlinkSync(path.join(os.tmpdir(), f)));
+    } catch (_) {}
+    throw new Error(`yt-dlp failed for ${videoId}: ${e.message}`);
+  }
 
   const savedFiles = fs.readdirSync(os.tmpdir()).filter(f =>
     f.includes(`agsstack_${videoId}_`) && !f.endsWith('.part')
