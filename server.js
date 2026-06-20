@@ -45,7 +45,7 @@ process.on('uncaughtException', (err) => {
 const fileCache = new Map();
 const FILE_TTL_MS = 8 * 60 * 1000;
 
-async function resolveToFile(videoId) {
+async function resolveToFile(videoId, attempt = 1) {
   const cached = fileCache.get(videoId);
   if (cached && Date.now() < cached.expiresAt && fs.existsSync(cached.filePath)) {
     const stat = fs.statSync(cached.filePath);
@@ -55,17 +55,30 @@ async function resolveToFile(videoId) {
   }
 
   const tempBase = path.join(os.tmpdir(), `agsstack_${videoId}_${Date.now()}`);
+  const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
 
-  const cookiesFlag = fs.existsSync(COOKIES_PATH)
-    ? `--cookies "${COOKIES_PATH}"`
-    : '';
+  const cmd = [
+    'yt-dlp',
+    '-f "ba[ext=m4a]/ba/bestaudio"',
+    '--no-playlist',
+    '--socket-timeout 15',
+    cookiesFlag,
+    `-o "${tempBase}.%(ext)s"`,
+    `"https://www.youtube.com/watch?v=${videoId}"`,
+  ].filter(Boolean).join(' ');
 
   try {
-    await execAsync(
-      `yt-dlp -f "ba[ext=m4a]/ba/bestaudio" --no-playlist --socket-timeout 15 ${cookiesFlag} -o "${tempBase}.%(ext)s" "https://www.youtube.com/watch?v=${videoId}"`,
-      { timeout: 90000 }
-    );
+    await execAsync(cmd, { timeout: 90000 });
   } catch (e) {
+    const isRateLimited = e.message.includes('429') || e.message.includes('Too Many Requests');
+
+    if (isRateLimited && attempt < 3) {
+      const backoffMs = attempt * 5000; // 5s, then 10s
+      console.warn(`[Retry] Rate limited on ${videoId}, attempt ${attempt}. Waiting ${backoffMs}ms`);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      return resolveToFile(videoId, attempt + 1);
+    }
+
     try {
       fs.readdirSync(os.tmpdir())
         .filter(f => f.includes(`agsstack_${videoId}_`))
@@ -97,7 +110,7 @@ async function resolveToFile(videoId) {
 
 // ─── Prewarm Batch ────────────────────────────────────────────────────────────
 async function prewarmBatch(videoIds) {
-  const CONCURRENCY = 4;
+  const CONCURRENCY = 2;
   const queue = [...videoIds];
 
   async function worker() {
