@@ -1,4 +1,3 @@
-// Explicitly inject user-space binary directories into the system execution PATH environment map
 process.env.PATH = `${process.env.PATH}:/usr/local/bin:/home/render/.local/bin`;
 
 import express from 'express';
@@ -13,20 +12,19 @@ import 'dotenv/config';
 
 const execAsync = promisify(exec);
 const app = express();
-// Dynamically read the assigned runtime port provided by Render's routing infrastructure
 const PORT = process.env.PORT || 3000;
-// Add near the top with other constants
-const COOKIES_PATH = process.env.COOKIES_PATH || path.join(__dirname, 'cookies.txt');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// COOKIES_PATH must come AFTER __dirname is defined
+const COOKIES_PATH = process.env.COOKIES_PATH || path.join(__dirname, 'cookies.txt');
 
 app.use(express.static(path.join(__dirname, 'public')));
 
 process.on('uncaughtException', (err) => {
   console.error('[Exception]:', err.message);
 });
-
 // ─── File Cache ───────────────────────────────────────────────────────────────
 const fileCache = new Map();
 const FILE_TTL_MS = 8 * 60 * 1000;
