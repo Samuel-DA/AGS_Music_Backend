@@ -18,7 +18,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // COOKIES_PATH must come AFTER __dirname is defined
-const COOKIES_PATH = process.env.COOKIES_PATH || path.join(__dirname, 'cookies.txt');
+const COOKIES_SOURCE = process.env.COOKIES_PATH || path.join(__dirname, 'cookies.txt');
+const COOKIES_PATH = path.join(os.tmpdir(), 'cookies.txt');
+
+function initCookies() {
+  try {
+    if (fs.existsSync(COOKIES_SOURCE)) {
+      fs.copyFileSync(COOKIES_SOURCE, COOKIES_PATH);
+      console.log(`[Startup] Cookies copied to writable path: ${COOKIES_PATH}`);
+    } else {
+      console.log(`[Startup] No cookies source found at: ${COOKIES_SOURCE}`);
+    }
+  } catch (e) {
+    console.error('[Startup] Cookie copy failed:', e.message);
+  }
+}
+
+initCookies();
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -242,6 +258,8 @@ app.get('/api/prewarm', async (req, res) => {
   res.json({ ok: true, queued: videoIds.length });
   prewarmBatch(videoIds).catch(e => console.error('[Prewarm Error]:', e.message));
 });
+
+
 
 // ─── Server Start ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
