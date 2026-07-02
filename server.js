@@ -275,6 +275,6 @@ app.get('/api/prewarm', async (req, res) => {
 
 
 // ─── Server Start ─────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`AGSStack Music Server running on port ${PORT}`);
 });
