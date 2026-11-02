@@ -102,7 +102,9 @@ function renderTrackDisplayList() {
     `;
 
     itemRow.querySelector('.entry-title').textContent = track.title || 'Untitled';
-    itemRow.querySelector('.entry-artist').textContent = track.artist || 'Unknown';
+    itemRow.querySelector('.entry-artist').textContent =
+      `${track.artist || 'Unknown'} · ${track.source === 'youtube' ? 'YouTube' : 'Direct audio'}`;
+    itemRow.querySelector('.entry-thumbnail').src = track.cover || SVG_PLACEHOLDER;
 
     itemRow.addEventListener('click', () => {
       rebuildPlaybackQueue();
@@ -122,17 +124,34 @@ async function resolveAndPlay() {
   playerArtist.textContent = targetTrack.artist;
   playerCover.src = SVG_PLACEHOLDER;
 
-  try {
-    audioEngine.src = `/api/stream/${targetTrack.id}`;
-    playerTitle.textContent = targetTrack.title;
-    updateFavoriteButtonUI();
-    state.isPlaying = true;
-    playBtn.textContent = '⏸';
-    audioEngine.play().catch(() => {});
+  playerCover.src = targetTrack.cover || SVG_PLACEHOLDER;
+  playerTitle.textContent = targetTrack.title;
+  updateFavoriteButtonUI();
+
+  if (targetTrack.source === 'youtube') {
+    audioEngine.pause();
+    state.isPlaying = false;
+    playBtn.textContent = '▶';
+    playerTitle.textContent = `${targetTrack.title} — opening YouTube`;
+    window.open(targetTrack.sourcePageUrl, '_blank', 'noopener,noreferrer');
     renderTrackDisplayList();
-  } catch (error) {
-    playerTitle.textContent = "Error — Try another track";
+    return;
   }
+
+  if (!targetTrack.audioUrl) {
+    playerTitle.textContent = "This track is not currently playable";
+    return;
+  }
+
+  audioEngine.src = targetTrack.audioUrl;
+  state.isPlaying = true;
+  playBtn.textContent = '⏸';
+  audioEngine.play().catch(() => {
+    state.isPlaying = false;
+    playBtn.textContent = '▶';
+    playerTitle.textContent = "Playback was blocked — press play again";
+  });
+  renderTrackDisplayList();
 }
 
 function handlePlayPauseAction() {

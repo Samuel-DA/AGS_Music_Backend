@@ -1,280 +1,282 @@
-process.env.PATH = `${process.env.PATH}:/usr/local/bin:/home/render/.local/bin`;
-
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fetch from 'node-fetch';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
-import os from 'os';
 import 'dotenv/config';
-
-const execAsync = promisify(exec);
-const app = express();
-const PORT = process.env.PORT || 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PORT = Number(process.env.PORT || 3000);
+const CEENAIJA_API = 'https://www.ceenaija.com/wp-json/wp/v2';
+const requestBuckets = new Map();
 
-// COOKIES_PATH must come AFTER __dirname is defined
-const COOKIES_SOURCE = process.env.COOKIES_PATH || path.join(__dirname, 'cookies.txt');
-const COOKIES_PATH = path.join(os.tmpdir(), 'cookies.txt');
+export function isYouTubeVideoId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{11}$/.test(value);
+}
 
-function initCookies() {
+export function parseISO8601Duration(value) {
+  if (typeof value !== 'string') return 0;
+  const match = value.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  return Number(match[1] || 0) * 3600 +
+      Number(match[2] || 0) * 60 +
+      Number(match[3] || 0);
+}
+
+function decodeHtml(value = '') {
+  const named = {
+    amp: '&',
+    apos: "'",
+    gt: '>',
+    lt: '<',
+    nbsp: ' ',
+    quot: '"',
+    '#038': '&',
+    '#039': "'",
+    '#8211': '–',
+    '#8212': '—',
+    '#8217': '’',
+  };
+  return value
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_, entity) => {
+      if (entity[0] === '#') {
+        const radix = entity[1]?.toLowerCase() === 'x' ? 16 : 10;
+        const number = Number.parseInt(entity.replace(/^#x?/i, ''), radix);
+        return Number.isFinite(number) ? String.fromCodePoint(number) : '';
+      }
+      return named[entity.toLowerCase()] ?? `&${entity};`;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function parsePostTitle(rawTitle) {
+  const cleaned = decodeHtml(rawTitle)
+    .replace(/^download\s+(?:song|mp3)\s*:\s*/i, '')
+    .trim();
+  const parts = cleaned.split(/\s+[–—-]\s+/);
+  if (parts.length < 2) {
+    return { title: cleaned || 'Untitled', artist: 'Unknown artist' };
+  }
+
+  const left = parts.shift().trim();
+  const right = parts.join(' – ').trim();
+  if (/mp3\s+download/i.test(left)) {
+    return {
+      title: left.replace(/\s*mp3\s+download.*$/i, '').trim(),
+      artist: right.replace(/\s*[([](?:song|mp3|lyrics|video).*$/i, '').trim(),
+    };
+  }
+  return {
+    title: right.replace(/\s*[([](?:song|mp3|lyrics|video).*$/i, '').trim(),
+    artist: left,
+  };
+}
+
+function extractDirectTrack(post) {
+  const html = post.content?.rendered || '';
+  const audioMatch = html.match(/<audio[^>]+src=["']([^"']+)["']/i);
+  const mp3Match = html.match(/https?:\/\/[^"'<>\s]+\.mp3(?:\?[^"'<>\s]*)?/i);
+  const encodedUrl = audioMatch?.[1] || mp3Match?.[0];
+  if (!encodedUrl) return null;
+
+  const { title, artist } = parsePostTitle(
+    post.title?.rendered || 'Untitled',
+  );
+  const imageMatch = html.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["']/i);
+  const audioUrl = decodeHtml(encodedUrl);
+
   try {
-    if (fs.existsSync(COOKIES_SOURCE)) {
-      fs.copyFileSync(COOKIES_SOURCE, COOKIES_PATH);
-      console.log(`[Startup] Cookies copied to writable path: ${COOKIES_PATH}`);
-    } else {
-      console.log(`[Startup] No cookies source found at: ${COOKIES_SOURCE}`);
-    }
-  } catch (e) {
-    console.error('[Startup] Cookie copy failed:', e.message);
+    const media = new URL(audioUrl);
+    if (!['https:', 'http:'].includes(media.protocol)) return null;
+  } catch {
+    return null;
+  }
+
+  return {
+    id: `ceenaija-${post.id}`,
+    title,
+    artist,
+    cover: post.jetpack_featured_media_url || decodeHtml(imageMatch?.[1] || ''),
+    duration: 0,
+    source: 'direct',
+    audioUrl,
+    sourcePageUrl: post.link,
+    canDownload: true,
+  };
+}
+
+async function fetchJson(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'AGSStackMusic/1.0' },
+    });
+    if (!response.ok) throw new Error(`Upstream returned ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-initCookies();
+export async function searchYouTube(query) {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return [];
 
-app.use(express.static(path.join(__dirname, 'public')));
+  const searchUrl = new URL('https://www.googleapis.com/youtube/v3/search');
+  searchUrl.search = new URLSearchParams({
+    part: 'snippet',
+    type: 'video',
+    videoCategoryId: '10',
+    maxResults: '15',
+    q: query,
+    key: apiKey,
+  });
+  const searchPayload = await fetchJson(searchUrl);
+  const items = (searchPayload.items || []).filter((item) =>
+    isYouTubeVideoId(item.id?.videoId),
+  );
+  if (items.length === 0) return [];
 
-process.on('uncaughtException', (err) => {
-  console.error('[Exception]:', err.message);
-});
-// ─── File Cache ───────────────────────────────────────────────────────────────
-const fileCache = new Map();
-const FILE_TTL_MS = 8 * 60 * 1000;
-
-async function resolveToFile(videoId, attempt = 1) {
-  const cached = fileCache.get(videoId);
-  if (cached && Date.now() < cached.expiresAt && fs.existsSync(cached.filePath)) {
-    const stat = fs.statSync(cached.filePath);
-    if (stat.size > 0) return cached.filePath;
-    fs.unlinkSync(cached.filePath);
-    fileCache.delete(videoId);
-  }
-
-  const tempBase = path.join(os.tmpdir(), `agsstack_${videoId}_${Date.now()}`);
-  const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
-
-  const cmd = [
-    'yt-dlp',
-    '-f "ba[ext=m4a]/ba/bestaudio"',
-    '--no-playlist',
-    '--socket-timeout 15',
-    cookiesFlag,
-    `-o "${tempBase}.%(ext)s"`,
-    `"https://www.youtube.com/watch?v=${videoId}"`,
-  ].filter(Boolean).join(' ');
-
-  try {
-    await execAsync(cmd, { timeout: 90000 });
-  } catch (e) {
-    const isRateLimited = e.message.includes('429') || e.message.includes('Too Many Requests');
-
-    if (isRateLimited && attempt < 3) {
-      const backoffMs = attempt * 5000; // 5s, then 10s
-      console.warn(`[Retry] Rate limited on ${videoId}, attempt ${attempt}. Waiting ${backoffMs}ms`);
-      await new Promise(resolve => setTimeout(resolve, backoffMs));
-      return resolveToFile(videoId, attempt + 1);
-    }
-
-    try {
-      fs.readdirSync(os.tmpdir())
-        .filter(f => f.includes(`agsstack_${videoId}_`))
-        .forEach(f => fs.unlinkSync(path.join(os.tmpdir(), f)));
-    } catch (_) {}
-    throw new Error(`yt-dlp failed for ${videoId}: ${e.message}`);
-  }
-
-  const savedFiles = fs.readdirSync(os.tmpdir()).filter(f =>
-    f.includes(`agsstack_${videoId}_`) && !f.endsWith('.part')
+  const detailsUrl = new URL('https://www.googleapis.com/youtube/v3/videos');
+  detailsUrl.search = new URLSearchParams({
+    part: 'contentDetails',
+    id: items.map((item) => item.id.videoId).join(','),
+    key: apiKey,
+  });
+  const details = await fetchJson(detailsUrl);
+  const durations = new Map(
+    (details.items || []).map((item) => [
+      item.id,
+      parseISO8601Duration(item.contentDetails?.duration),
+    ]),
   );
 
-  if (savedFiles.length === 0) throw new Error(`No output file found for ${videoId}`);
-
-  const actualPath = path.join(os.tmpdir(), savedFiles[0]);
-  const stat = fs.statSync(actualPath);
-  if (stat.size === 0) {
-    fs.unlinkSync(actualPath);
-    throw new Error(`Empty file for ${videoId}`);
-  }
-
-  const ext = path.extname(savedFiles[0]);
-  const filePath = path.join(os.tmpdir(), `agsstack_${videoId}${ext}`);
-  fs.renameSync(actualPath, filePath);
-
-  fileCache.set(videoId, { filePath, expiresAt: Date.now() + FILE_TTL_MS });
-  return filePath;
+  return items.map((item) => ({
+    id: item.id.videoId,
+    title: decodeHtml(item.snippet.title),
+    artist: decodeHtml(item.snippet.channelTitle),
+    cover: item.snippet.thumbnails?.high?.url ||
+      item.snippet.thumbnails?.medium?.url || '',
+    duration: durations.get(item.id.videoId) || 0,
+    source: 'youtube',
+    audioUrl: null,
+    sourcePageUrl: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+    canDownload: false,
+  }));
 }
 
-// ─── Prewarm Batch ────────────────────────────────────────────────────────────
-async function prewarmBatch(videoIds) {
-  const CONCURRENCY = 2;
-  const queue = [...videoIds];
+export async function searchCeeNaija(query) {
+  const searchUrl = new URL(`${CEENAIJA_API}/search`);
+  searchUrl.search = new URLSearchParams({
+    search: query,
+    per_page: '8',
+    subtype: 'post',
+  });
+  const results = await fetchJson(searchUrl);
+  const posts = await Promise.allSettled(
+    results.map(async (result) => {
+      const postUrl = new URL(result._links?.self?.[0]?.href ||
+        `${CEENAIJA_API}/posts/${result.id}`);
+      postUrl.searchParams.set(
+        '_fields',
+        'id,link,title,content,jetpack_featured_media_url',
+      );
+      return fetchJson(postUrl);
+    }),
+  );
 
-  async function worker() {
-    while (queue.length > 0) {
-      const id = queue.shift();
-      if (!id) return;
-      try {
-        await resolveToFile(id);
-      } catch (e) {
-        console.warn(`[Prewarm Failed] ${id}: ${e.message}`);
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  return posts
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => extractDirectTrack(result.value))
+    .filter(Boolean);
 }
 
-// ─── Cleanup Job ──────────────────────────────────────────────────────────────
-setInterval(() => {
+function rateLimit(req, res, next) {
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
-  for (const [videoId, entry] of fileCache.entries()) {
-    if (now >= entry.expiresAt) {
-      try {
-        fs.unlinkSync(entry.filePath);
-        fileCache.delete(videoId);
-      } catch (_) {}
-    }
+  const previous = requestBuckets.get(key);
+  const bucket = !previous || now - previous.startedAt >= 60_000
+    ? { startedAt: now, count: 0 }
+    : previous;
+  bucket.count += 1;
+  requestBuckets.set(key, bucket);
+  if (bucket.count > 60) {
+    return res.status(429).json({ error: 'Too many requests. Try again shortly.' });
   }
-}, 10 * 60 * 1000);
-
-// ─── ISO Duration Parser ──────────────────────────────────────────────────────
-function parseISO8601Duration(iso) {
-  if (!iso) return 0;
-  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) return 0;
-  const hours = parseInt(match[1] || '0');
-  const minutes = parseInt(match[2] || '0');
-  const seconds = parseInt(match[3] || '0');
-  return hours * 3600 + minutes * 60 + seconds;
+  next();
 }
 
-// ─── Health Check ─────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+export function createApp() {
+  const app = express();
+  app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+  app.use(rateLimit);
+  app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Keepalive ────────────────────────────────────────────────────────────────
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
-if (RENDER_URL) {
-  setInterval(async () => {
+  app.get('/health', (req, res) => res.json({
+    status: 'ok',
+    youtubeConfigured: Boolean(process.env.YOUTUBE_API_KEY),
+  }));
+
+  app.get('/api/search', async (req, res) => {
+    const query = String(req.query.q || '').trim().slice(0, 120);
+    if (!query) return res.status(400).json({ error: 'Enter a search term.' });
+
+    const [direct, youtube] = await Promise.allSettled([
+      searchCeeNaija(query),
+      searchYouTube(query),
+    ]);
+    const results = [
+      ...(direct.status === 'fulfilled' ? direct.value : []),
+      ...(youtube.status === 'fulfilled' ? youtube.value : []),
+    ];
+
+    if (results.length === 0 && direct.status === 'rejected' &&
+        youtube.status === 'rejected') {
+      return res.status(502).json({ error: 'Music sources are unavailable.' });
+    }
+    return res.json(results);
+  });
+
+  app.get('/api/search/direct', async (req, res, next) => {
+    const query = String(req.query.q || '').trim().slice(0, 120);
+    if (!query) return res.status(400).json({ error: 'Enter a search term.' });
     try {
-      await fetch(`${RENDER_URL}/health`);
-    } catch (_) {}
-  }, 14 * 60 * 1000);
+      return res.json(await searchCeeNaija(query));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/api/search/youtube', async (req, res, next) => {
+    const query = String(req.query.q || '').trim().slice(0, 120);
+    if (!query) return res.status(400).json({ error: 'Enter a search term.' });
+    try {
+      return res.json(await searchYouTube(query));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.use((error, req, res, next) => {
+    console.error('[API Error]', error.message);
+    if (res.headersSent) return next(error);
+    return res.status(502).json({ error: 'A music source could not be reached.' });
+  });
+
+  return app;
 }
 
-// ─── Search Endpoint ──────────────────────────────────────────────────────────
-app.get('/api/search', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  const { q } = req.query;
-  if (!q) return res.status(400).json({ error: 'Missing query' });
-  if (!process.env.YOUTUBE_API_KEY) {
-    return res.status(500).json({ error: 'YOUTUBE_API_KEY not set' });
-  }
-
-  try {
-    const searchRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&maxResults=15&q=${encodeURIComponent(q)}&key=${process.env.YOUTUBE_API_KEY}`
-    );
-    const searchPayload = await searchRes.json();
-
-    if (!searchPayload.items) {
-      return res.status(500).json({ error: searchPayload.error?.message || 'No results' });
-    }
-
-    const validItems = searchPayload.items.filter(
-      item => item.id?.kind === 'youtube#video' && item.id?.videoId
-    );
-
-    const ids = validItems.map(item => item.id.videoId).join(',');
-    const detailRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${process.env.YOUTUBE_API_KEY}`
-    );
-    const detailPayload = await detailRes.json();
-
-    const durationMap = {};
-    for (const video of detailPayload.items || []) {
-      durationMap[video.id] = parseISO8601Duration(video.contentDetails.duration);
-    }
-
-    const tracks = validItems.map(item => ({
-      id: item.id.videoId,
-      title: item.snippet.title,
-      artist: item.snippet.channelTitle,
-      cover: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.default?.url,
-      duration: durationMap[item.id.videoId] ?? 0,
-    }));
-
-    res.json(tracks);
-  } catch (error) {
-    console.error('[Search Error]:', error.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-// ─── Stream Endpoint ──────────────────────────────────────────────────────────
-app.get('/api/stream/:id', async (req, res) => {
-  const videoId = req.params.id;
-  try {
-    const filePath = await resolveToFile(videoId);
-    const stat = fs.statSync(filePath);
-    if (stat.size === 0) {
-      fileCache.delete(videoId);
-      return res.status(500).json({ error: 'Empty audio file' });
-    }
-
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType = {
-      '.m4a': 'audio/mp4',
-      '.webm': 'audio/webm',
-      '.opus': 'audio/ogg',
-      '.mp3': 'audio/mpeg',
-    }[ext] || 'audio/mp4';
-
-    const fileSize = stat.size;
-    const range = req.headers.range;
-
-    if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunkSize = end - start + 1;
-
-      res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': contentType,
-      });
-      fs.createReadStream(filePath, { start, end }).pipe(res);
-    } else {
-      res.writeHead(200, {
-        'Content-Length': fileSize,
-        'Content-Type': contentType,
-        'Accept-Ranges': 'bytes',
-      });
-      fs.createReadStream(filePath).pipe(res);
-    }
-  } catch (error) {
-    console.error('[Stream Error]:', error.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
-  }
-});
-
-// ─── Prewarm Endpoint ─────────────────────────────────────────────────────────
-app.get('/api/prewarm', async (req, res) => {
-  const { ids } = req.query;
-  if (!ids) return res.status(400).json({ error: 'Missing ids' });
-  const videoIds = ids.split(',').filter(Boolean).slice(0, 15);
-  res.json({ ok: true, queued: videoIds.length });
-  prewarmBatch(videoIds).catch(e => console.error('[Prewarm Error]:', e.message));
-});
-
-
-
-// ─── Server Start ─────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`AGSStack Music Server running on port ${PORT}`);
-});
+if (process.argv[1] === __filename) {
+  createApp().listen(PORT, '0.0.0.0', () => {
+    console.log(`AGSStack Music server running on port ${PORT}`);
+  });
+}

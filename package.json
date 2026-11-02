@@ -1,10 +1,10 @@
 {
   "name": "global-stream-jukebox",
   "version": "1.0.0",
-  "description": "",
-  "main": "app.js",
+  "description": "Metadata and authorised direct-audio discovery for AGSStack Music",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test",
     "start": "node server.js"
   },
   "keywords": [],
@@ -13,8 +13,6 @@
   "type": "module",
   "dependencies": {
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "node-fetch": "^3.3.2",
-    "youtube-ext": "^1.1.25"
+    "express": "^5.2.1"
   }
 }

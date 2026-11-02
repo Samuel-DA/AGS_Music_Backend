@@ -2,8 +2,8 @@ services:
   - type: web
     name: agsstack-music
     runtime: node
-    buildCommand: pip install yt-dlp && npm install
-    startCommand: node server.js
+    buildCommand: npm ci
+    startCommand: npm start
     envVars:
       - key: YOUTUBE_API_KEY
         sync: false
